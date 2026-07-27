@@ -72,7 +72,7 @@ local function normalize_custom(raw)
 end
 
 local function load_custom_quotes()
-    local path = DataStorage:getSettingsDir() .. "/Moments of Zen/custom_quotes.lua"
+    local path = DataStorage:getSettingsDir() .. "/Zen UI/custom_quotes.lua"
     local ok, raw = pcall(dofile, path)
     return ok and normalize_custom(raw) or {}
 end

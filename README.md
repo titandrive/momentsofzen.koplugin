@@ -38,7 +38,7 @@ automatic font sizing.
 Create this file:
 
 ```text
-koreader/settings/Moments of Zen/custom_quotes.lua
+koreader/settings/Zen UI/custom_quotes.lua
 ```
 
 The file must return a Lua table. Each entry uses:
