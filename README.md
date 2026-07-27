@@ -1,7 +1,7 @@
 # Moments of Zen: A ZenUI plugin
 
 Moments of Zen is a [KOReader](https://github.com/koreader/koreader) plugin
-that adds a quote widget to the Zen UI Home page.
+that adds a quote widget to the [Zen UI](https://github.com/AnthonyGress/zen_ui.koplugin) Home page.
 
 <img width="300" alt="ZenUI homescreen with Moments of Zen widget" src="https://github.com/user-attachments/assets/b528aa30-e37a-4205-8ed0-c83abdfc3612" />
 
