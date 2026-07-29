@@ -24,6 +24,19 @@ local settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/settings.mom
 local annotation_cache
 local quote_history = {}
 local history_position = 0
+local DEFAULT_QUOTES = {}
+local ok_defaults, defaults = pcall(
+    require, "modules/filebrowser/patches/home/quote_list"
+)
+if ok_defaults and type(defaults) == "table" then DEFAULT_QUOTES = defaults end
+
+local QUOTES_TEMPLATE = [[return {
+    -- Add your quotes here, then enable Custom quotes in the widget settings.
+    -- { text = "Quote text", author = "Author" },
+    -- { text = "Quote text", author = "Author", title = "Book title" },
+    -- "Plain quote without author",
+}
+]]
 
 local MomentsOfZen = WidgetContainer:extend{
     name = "momentsofzen",
@@ -43,27 +56,27 @@ local function normalize_custom(raw)
 
     local quotes = {}
     for _, item in ipairs(raw) do
-        local text, author, book
+        local text, author, title
         if type(item) == "string" then
-            text, author, book = item, "", ""
+            text, author, title = item, "", ""
         elseif type(item) == "table" then
-            -- SimpleUI format: q = quote, a = author, b = book.
-            -- Keep the older Zen UI fields as a backwards-compatible fallback.
+            -- Support the current Zen UI format, the original Zen UI format,
+            -- and the older SimpleUI-style format used by this plugin.
             text = item.q or item.text or item[1]
             author = item.a or item.author or item[2] or ""
-            book = item.b or item.book or item[3] or ""
+            title = item.b or item.book or item.title or item[3] or ""
         end
         text = trim(text)
         if text ~= "" then
-            author, book = trim(author), trim(book)
+            author, title = trim(author), trim(title)
             local attribution = author
-            if book ~= "" then
-                attribution = attribution .. (attribution ~= "" and ",  " or "") .. book
+            if title ~= "" then
+                attribution = attribution .. (attribution ~= "" and ",  " or "") .. title
             end
             quotes[#quotes + 1] = {
                 text = text,
                 author = author,
-                book = book,
+                title = title,
                 attribution = attribution,
             }
         end
@@ -72,9 +85,22 @@ local function normalize_custom(raw)
 end
 
 local function load_custom_quotes()
-    local path = DataStorage:getSettingsDir() .. "/Zen UI/custom_quotes.lua"
+    local dir = DataStorage:getSettingsDir() .. "/Zen UI"
+    if lfs.attributes(dir, "mode") ~= "directory" then lfs.mkdir(dir) end
+    local path = dir .. "/quotes.lua"
+    if lfs.attributes(path, "mode") ~= "file" then
+        local file = io.open(path, "w")
+        if file then
+            file:write(QUOTES_TEMPLATE)
+            file:close()
+        end
+    end
     local ok, raw = pcall(dofile, path)
     return ok and normalize_custom(raw) or {}
+end
+
+local function has_custom_quotes()
+    return #load_custom_quotes() > 0
 end
 
 local function book_info(data, path)
@@ -108,7 +134,7 @@ local function append_annotations(quotes, path, seen_quotes)
         quotes[#quotes + 1] = {
             text = text,
             author = authors,
-            book = title,
+            title = title,
             -- Match SimpleUI highlights: book title first, then author.
             attribution = attribution,
             is_annotation = true,
@@ -171,16 +197,34 @@ local function load_annotation_quotes()
     return quotes
 end
 
-local function source_mode()
-    local value = settings:readSetting("source")
-    if value == "custom" or value == "annotations" or value == "both" then
-        return value
-    end
-    return "both"
+local function source_enabled(name)
+    local sources = settings:readSetting("sources")
+    if type(sources) ~= "table" then return name == "default" end
+    return sources[name] == true
 end
 
 local function automatic_font_size()
-    return settings:readSetting("automatic_font_size") ~= false
+    return settings:readSetting("automatic_font_size") == true
+end
+
+local function font_size()
+    return math.max(4, math.min(32, tonumber(settings:readSetting("font_size")) or 12))
+end
+
+local function max_font_size()
+    return math.max(4, math.min(32, tonumber(settings:readSetting("max_font_size")) or 16))
+end
+
+local function show_author()
+    return settings:readSetting("show_author") ~= false
+end
+
+local function show_title()
+    return settings:readSetting("show_title") ~= false
+end
+
+local function rotation_mode()
+    return settings:readSetting("rotation") == "refresh" and "refresh" or "daily"
 end
 
 local function shuffle(count)
@@ -233,21 +277,41 @@ local function draw_from(pool, prefix)
     return pool[index]
 end
 
-local function draw_quote()
-    local mode = source_mode()
-    local custom = (mode == "custom" or mode == "both") and load_custom_quotes() or {}
-    local annotations = (mode == "annotations" or mode == "both")
-        and load_annotation_quotes() or {}
-
-    if mode == "custom" then return draw_from(custom, "custom") end
-    if mode == "annotations" then return draw_from(annotations, "annotations") end
-
-    if #custom == 0 then return draw_from(annotations, "annotations") end
-    if #annotations == 0 then return draw_from(custom, "custom") end
-    if math.random(2) == 1 then
-        return draw_from(custom, "custom")
+local function selected_quotes()
+    local quotes = {}
+    local function append(items)
+        for _, quote in ipairs(items) do quotes[#quotes + 1] = quote end
     end
-    return draw_from(annotations, "annotations")
+    if source_enabled("default") then append(DEFAULT_QUOTES) end
+    if source_enabled("custom") and has_custom_quotes() then append(load_custom_quotes()) end
+    if source_enabled("annotations") then append(load_annotation_quotes()) end
+    if #quotes == 0 then append(DEFAULT_QUOTES) end
+    return quotes
+end
+
+local function draw_quote()
+    return draw_from(selected_quotes(), "combined")
+end
+
+local function select_quote_for_rotation()
+    local today = os.date("%Y-%j")
+    local previous_day = settings:readSetting("quote_day")
+    local quote
+    if rotation_mode() == "daily" and previous_day == today
+            and type(settings:readSetting("current_quote_text")) == "string" then
+        local wanted = settings:readSetting("current_quote_text")
+        for _, candidate in ipairs(selected_quotes()) do
+            if candidate.text == wanted then
+                quote = candidate
+                break
+            end
+        end
+    end
+    if not quote then quote = draw_quote() end
+    settings:saveSetting("quote_day", today)
+    settings:saveSetting("current_quote_text", quote and quote.text or nil)
+    settings:flush()
+    return quote
 end
 
 local function reset_session_history()
@@ -257,7 +321,8 @@ end
 
 local function current_quote()
     if history_position < 1 then
-        local quote = draw_quote() or { text = _("No quotes found."), attribution = "" }
+        local quote = select_quote_for_rotation()
+            or { text = _("No quotes available."), attribution = "" }
         quote_history[1] = quote
         history_position = 1
     end
@@ -284,8 +349,14 @@ local function step_quote(delta)
     refresh_widget()
 end
 
-local function set_source(mode)
-    settings:saveSetting("source", mode)
+local function toggle_source(name)
+    local sources = settings:readSetting("sources")
+    if type(sources) ~= "table" then sources = { default = true } end
+    sources[name] = sources[name] ~= true
+    if not sources.default and not sources.custom and not sources.annotations then
+        sources.default = true
+    end
+    settings:saveSetting("sources", sources)
     settings:flush()
     reset_session_history()
     refresh_widget()
@@ -293,38 +364,118 @@ end
 
 local function show_widget_settings()
     local dialog
-    local function source_button(label, mode)
-        local selected = source_mode() == mode
+    local function reopen()
+        if dialog then UIManager:close(dialog) end
+        UIManager:nextTick(show_widget_settings)
+    end
+    local function save_and_reopen(key, value, reset_quotes)
+        settings:saveSetting(key, value)
+        settings:flush()
+        if reset_quotes then reset_session_history() end
+        refresh_widget()
+        reopen()
+    end
+    local function source_button(label, name, enabled)
         return {
-            text = (selected and "\226\156\147  " or "     ") .. label,
+            text = (source_enabled(name) and "\226\156\147  " or "     ") .. label,
             align = "left",
+            enabled = enabled ~= false,
             callback = function()
-                UIManager:close(dialog)
-                set_source(mode)
+                toggle_source(name)
+                reopen()
             end,
         }
     end
+    local size_label = automatic_font_size()
+        and string.format(_("Maximum font size: %d"), max_font_size())
+        or string.format(_("Font size: %d"), font_size())
 
-    dialog = ButtonDialog:new{
-        title = _("Moments of Zen"),
-        modal = true,
-        buttons = {
-            { source_button(_("Custom quotes"), "custom") },
-            { source_button(_("Annotations"), "annotations") },
-            { source_button(_("Custom quotes and annotations"), "both") },
+    local buttons = {
+            { { text = _("Quote sources"), enabled = false, align = "left" } },
+            { source_button(_("Default quotes"), "default") },
+            { source_button(_("Custom quotes"), "custom", has_custom_quotes()) },
+    }
+    if not has_custom_quotes() then
+        buttons[#buttons + 1] = {
+            { text = _("quotes.lua is empty"), enabled = false, align = "left" },
+        }
+    end
+    buttons[#buttons + 1] = { source_button(_("Annotations"), "annotations") }
+    local remaining = {
+            {
+                {
+                    text = (rotation_mode() == "daily" and "\226\156\147  " or "     ")
+                        .. _("New quote daily"),
+                    align = "left",
+                    callback = function()
+                        save_and_reopen("rotation", "daily", true)
+                    end,
+                },
+            },
+            {
+                {
+                    text = (rotation_mode() == "refresh" and "\226\156\147  " or "     ")
+                        .. _("New quote on Home refresh"),
+                    align = "left",
+                    callback = function()
+                        save_and_reopen("rotation", "refresh", true)
+                    end,
+                },
+            },
             {
                 {
                     text = (automatic_font_size() and "\226\156\147  " or "     ")
                         .. _("Automatic font size"),
                     align = "left",
                     callback = function()
-                        settings:saveSetting(
-                            "automatic_font_size",
-                            not automatic_font_size()
+                        save_and_reopen(
+                            "automatic_font_size", not automatic_font_size(), false
                         )
-                        settings:flush()
-                        UIManager:close(dialog)
-                        refresh_widget()
+                    end,
+                },
+            },
+            {
+                {
+                    text = size_label,
+                    align = "left",
+                    callback = function()
+                        local SpinWidget = require("ui/widget/spinwidget")
+                        local auto = automatic_font_size()
+                        UIManager:show(SpinWidget:new{
+                            title_text = auto and _("Maximum font size") or _("Font size"),
+                            value = auto and max_font_size() or font_size(),
+                            value_min = 4,
+                            value_max = 32,
+                            value_step = 1,
+                            callback = function(spin)
+                                settings:saveSetting(
+                                    auto and "max_font_size" or "font_size", spin.value
+                                )
+                                settings:flush()
+                                refresh_widget()
+                                reopen()
+                            end,
+                        })
+                    end,
+                },
+            },
+            {
+                {
+                    text = (show_author() and "\226\156\147  " or "     ")
+                        .. _("Show author"),
+                    align = "left",
+                    callback = function()
+                        save_and_reopen("show_author", not show_author(), false)
+                    end,
+                },
+            },
+            {
+                {
+                    text = (show_title() and "\226\156\147  " or "     ")
+                        .. _("Show title"),
+                    align = "left",
+                    callback = function()
+                        save_and_reopen("show_title", not show_title(), false)
                     end,
                 },
             },
@@ -335,12 +486,17 @@ local function show_widget_settings()
                     callback = function()
                         annotation_cache = nil
                         reset_session_history()
-                        UIManager:close(dialog)
                         refresh_widget()
+                        reopen()
                     end,
                 },
             },
-        },
+        }
+    for _, row in ipairs(remaining) do buttons[#buttons + 1] = row end
+    dialog = ButtonDialog:new{
+        title = _("Moments of Zen"),
+        modal = true,
+        buttons = buttons,
     }
     UIManager:show(dialog)
     return true
@@ -352,34 +508,48 @@ local function open_annotation(quote)
     local filename = filepath:match("([^/\\]+)$") or filepath
 
     local function open()
-        local ReaderUI = require("apps/reader/readerui")
-        ReaderUI:showReader(filepath)
-        if pos0 or page then
-            UIManager:scheduleIn(0.5, function()
-                local reader = package.loaded["apps/reader/readerui"]
-                local instance = reader and reader.instance
-                if not instance then return end
-                local Event = require("ui/event")
-                if pos0 then
-                    instance:handleEvent(Event:new("GotoXPointer", pos0, pos0))
-                elseif page then
-                    instance:handleEvent(Event:new("GotoPage", tonumber(page) or page))
-                end
-            end)
-        end
+        UIManager:nextTick(function()
+            local FileManager = require("apps/filemanager/filemanager")
+            local filemanagerutil = require("apps/filemanager/filemanagerutil")
+            local fm = FileManager.instance
+            if filemanagerutil.openFile then
+                filemanagerutil.openFile(fm, filepath)
+            elseif fm and type(fm.openFile) == "function" then
+                fm:openFile(filepath)
+            else
+                local ReaderUI = require("apps/reader/readerui")
+                ReaderUI:showReader(filepath)
+            end
+            if pos0 or page then
+                UIManager:scheduleIn(0.5, function()
+                    local reader = package.loaded["apps/reader/readerui"]
+                    local instance = reader and reader.instance
+                    if not instance then return end
+                    local Event = require("ui/event")
+                    if pos0 then
+                        instance:handleEvent(Event:new("GotoXPointer", pos0))
+                    elseif page then
+                        instance:handleEvent(Event:new("GotoPage", tonumber(page) or page))
+                    end
+                end)
+            end
+        end)
     end
 
     local ConfirmBox = require("ui/widget/confirmbox")
-    UIManager:show(ConfirmBox:new{
-        text = _("Open this file?") .. "\n\n" .. filename,
-        ok_text = _("Open"),
-        cancel_text = _("Cancel"),
-        ok_callback = open,
-    })
+    UIManager:nextTick(function()
+        UIManager:show(ConfirmBox:new{
+            text = _("Open this file?") .. "\n\n" .. filename,
+            ok_text = _("Open"),
+            cancel_text = _("Cancel"),
+            ok_callback = open,
+        })
+    end)
     return true
 end
 
 local function build_widget(ctx)
+    if rotation_mode() == "refresh" then reset_session_history() end
     local width, height = ctx.width, ctx.height
     local quote = current_quote()
     local screen = Device.screen
@@ -387,16 +557,23 @@ local function build_widget(ctx)
     local content_width = math.max(30, width - padding * 2)
     local gap = screen:scaleBySize(3)
     local quote_text = "\226\128\156" .. quote.text .. "\226\128\157"
-    local attribution_text = quote.attribution and quote.attribution ~= ""
-        and ("\226\128\148 " .. quote.attribution) or nil
+    local attribution_parts = {}
+    if show_author() and quote.author and quote.author ~= "" then
+        attribution_parts[#attribution_parts + 1] = quote.author
+    end
+    if show_title() and quote.title and quote.title ~= "" then
+        attribution_parts[#attribution_parts + 1] = quote.title
+    end
+    local attribution = table.concat(attribution_parts, ",  ")
+    local attribution_text = attribution ~= "" and ("\226\128\148 " .. attribution) or nil
     local available_height = math.max(20, height - padding * 2)
     local auto_font = automatic_font_size()
 
     -- Pick the largest size whose naturally wrapped quote and attribution fit.
-    local quote_size = auto_font and 8 or 12
+    local quote_size = auto_font and 4 or font_size()
     local natural_quote_height, author_height = 20, 0
-    local largest_size = auto_font and 16 or 12
-    local smallest_size = auto_font and 8 or 12
+    local largest_size = auto_font and max_font_size() or quote_size
+    local smallest_size = auto_font and 4 or quote_size
     for candidate = largest_size, smallest_size, -1 do
         local candidate_quote_face = Font:getFace(
             "smallinfofont", screen:scaleBySize(candidate)
@@ -416,7 +593,7 @@ local function build_widget(ctx)
             local candidate_author_face = Font:getFace(
                 "smallinfofont",
                 screen:scaleBySize(
-                    auto_font and math.max(7, math.floor(candidate * 0.82)) or 10
+                    math.max(6, math.floor(candidate * 0.9))
                 )
             )
             local author_probe = TextBoxWidget:new{
@@ -437,7 +614,7 @@ local function build_widget(ctx)
         if total_height <= available_height then break end
     end
 
-    local author_size = auto_font and math.max(7, math.floor(quote_size * 0.82)) or 10
+    local author_size = math.max(6, math.floor(quote_size * 0.9))
     local quote_face = Font:getFace("smallinfofont", screen:scaleBySize(quote_size))
     local author_face = Font:getFace("smallinfofont", screen:scaleBySize(author_size))
 
