@@ -28,6 +28,13 @@ local DEFAULT_QUOTES = {}
 local ok_defaults, defaults = pcall(
     require, "modules/filebrowser/patches/home/quote_list"
 )
+if not ok_defaults then
+    ok_defaults, defaults = pcall(
+        dofile,
+        DataStorage:getDataDir()
+            .. "/plugins/zen_ui.koplugin/modules/filebrowser/patches/home/quote_list.lua"
+    )
+end
 if ok_defaults and type(defaults) == "table" then DEFAULT_QUOTES = defaults end
 
 local QUOTES_TEMPLATE = [[return {
