@@ -1,4 +1,10 @@
-# Moments of Zen: A ZenUI plugin
+# Moments of Zen: A Zen UI plugin (deprecated)
+
+> [!IMPORTANT]
+> **This plugin is deprecated.** Its functionality is built into
+> [Zen UI](https://github.com/AnthonyGress/zen_ui.koplugin) 3.0 Beta 2 and
+> later. Use Zen UI's built-in Quotes widget instead, and do not install this
+> standalone plugin alongside it.
 
 Moments of Zen is a [KOReader](https://github.com/koreader/koreader) plugin
 that adds a quote widget to the [Zen UI](https://github.com/AnthonyGress/zen_ui.koplugin) Home page.

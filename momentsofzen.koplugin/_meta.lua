@@ -1,6 +1,6 @@
 return {
     name = "momentsofzen",
     fullname = "Moments of Zen",
-    description = [[Adds a configurable custom and annotation quote widget to Zen UI.]],
+    description = [[Deprecated: built into Zen UI 3.0 Beta 2 and later.]],
     version = "1.0.0",
 }
